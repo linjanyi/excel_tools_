@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>Excel 萬能工具箱 - Google Sheet 整合版</title>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        body { font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; background: #f0f2f5; padding: 20px; }
+        .card { max-width: 700px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
+        h2 { color: #007bff; text-align: center; margin-bottom: 20px; }
+        .tabs { display: flex; margin-bottom: 20px; border-bottom: 2px solid #eee; }
+        .tab { flex: 1; text-align: center; padding: 12px; cursor: pointer; font-weight: bold; color: #888; transition: 0.3s; }
+        .tab.active { color: #007bff; border-bottom: 3px solid #007bff; background: #f8fbff; }
+        .field-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; color: #333; }
+        input[type="text"], input[type="number"], input[type="file"] { width: 100%; padding: 10px; border: 1px solid #ccd0d5; border-radius: 8px; box-sizing: border-box; }
+        .row { display: flex; gap: 15px; }
+        .row .field-group { flex: 1; }
+        .checkbox-group { display: flex; align-items: center; background: #e9ecef; padding: 10px 15px; border-radius: 8px; margin-bottom: 10px; cursor: pointer; }
+        .checkbox-group input { width: 18px; height: 18px; margin-right: 10px; }
+        .info-box { background: #e8f4fd; color: #2c3e50; padding: 12px; border-radius: 8px; margin-bottom: 15px; font-size: 13px; border-left: 4px solid #3498db; }
+        button { width: 100%; padding: 15px; background: #28a745; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.3s; margin-top: 10px; }
+        button:hover { background: #218838; }
+        #log { margin-top: 20px; font-size: 14px; color: #444; padding: 12px; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #007bff; white-space: pre-line; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2 id="mainTitle">📊 Excel 萬能工具箱</h2>
+    
+    <div class="tabs">
+        <div class="tab active" onclick="switchMode('split')">✂️ 分割/合併</div>
+        <div class="tab" onclick="switchMode('transform')">🔄 格式轉換</div>
+        <div class="tab" onclick="switchMode('proxy')">🌐 代理分配</div>
+    </div>
+    
+    <div id="commonUpload" class="field-group">
+        <label>1. 上傳檔案 (可多選)</label>
+        <input type="file" id="upload" accept=".xlsx, .xls" multiple />
+    </div>
+
+    <div id="proxyUpload" class="field-group" style="display:none;">
+        <div class="field-group">
+            <label>1. 上傳用戶表 (Excel)</label>
+            <input type="file" id="userTable" accept=".xlsx, .xls">
+        </div>
+        <div class="field-group">
+            <label>2. Google Sheet ID (代理表)</label>
+            <input type="text" id="sheetId" placeholder="19qYOvdspfs4LG_GxbiCFDQagem5fYRsS6sYMjwy9BFE">
+            <p style="font-size: 11px; color: #666; margin-top: 5px;">請將試算表權限設為「知道連結的人均可檢視」</p>
+        </div>
+    </div>
+
+    <div id="splitUI">
+        <div class="row">
+            <div class="field-group">
+                <label>2. 保留標題列數</label>
+                <input type="number" id="headerRows" value="2" min="1" />
+            </div>
+            <div class="field-group">
+                <label>3. 每份筆數 (0=不分割)</label>
+                <input type="number" id="rowsPerFile" value="0" min="0" />
+            </div>
+        </div>
+        <div class="checkbox-group" onclick="document.getElementById('doUnique').click()">
+            <input type="checkbox" id="doUnique" checked onclick="event.stopPropagation()">
+            <label>自動去除重複</label>
+        </div>
+    </div>
+
+    <div id="transformUI" style="display:none;">
+        <div class="info-box">
+            <strong>📍 轉換規則：</strong><br>
+            • A 檔 U 欄位 → <strong>device</strong> (最後一欄)
+        </div>
+    </div>
+
+    <div id="proxyUI" style="display:none;">
+        <div class="info-box">
+            <strong>🌐 雲端代理分配：</strong><br>
+            • 直接從 Google Sheet 獲取最新 IP。<br>
+            • 欄位名稱請包含 'proxy'。
+        </div>
+    </div>
+    
+    <button id="mainBtn" onclick="executeAction()">開始執行並導出</button>
+    
+    <div id="log">等待操作...</div>
+</div>
+
+<script>
+let currentMode = 'split';
+
+function switchMode(mode) {
+    currentMode = mode;
+    const tabs = document.querySelectorAll('.tab');
+    tabs[0].classList.toggle('active', mode === 'split');
+    tabs[1].classList.toggle('active', mode === 'transform');
+    tabs[2].classList.toggle('active', mode === 'proxy');
+
+    document.getElementById('commonUpload').style.display = (mode === 'proxy') ? 'none' : 'block';
+    document.getElementById('proxyUpload').style.display = (mode === 'proxy') ? 'block' : 'none';
+    document.getElementById('splitUI').style.display = (mode === 'split') ? 'block' : 'none';
+    document.getElementById('transformUI').style.display = (mode === 'transform') ? 'block' : 'none';
+    document.getElementById('proxyUI').style.display = (mode === 'proxy') ? 'block' : 'none';
+    document.getElementById('mainBtn').innerText = (mode === 'proxy') ? "從雲端獲取並分配" : "開始處理並導出";
+}
+
+function getMMDD() {
+    const now = new Date();
+    return String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
+}
+
+async function executeAction() {
+    const log = document.getElementById('log');
+    const dateStr = getMMDD();
+
+    if (currentMode === 'proxy') {
+        await handleCloudProxy(dateStr, log);
+    } else {
+        // ... 原有的 split 與 transform 邏輯 ...
+        // (此處為節省長度，省略重複代碼，請保留您之前的邏輯)
+        const fileInput = document.getElementById('upload');
+        if (fileInput.files.length === 0) { alert("請先選擇檔案！"); return; }
+        log.innerHTML = "⌛ 處理中...";
+        if (currentMode === 'split') await handleSplitMerge(fileInput, dateStr, log);
+        else await handleTransform(fileInput, dateStr, log);
+    }
+}
+
+// 🌐 核心：從 Google Sheets 獲取資料
+async function handleCloudProxy(dateStr, log) {
+    const userFile = document.getElementById('userTable').files[0];
+    const sheetId = document.getElementById('sheetId').value.trim();
+
+    if (!userFile || !sheetId) { alert('請上傳用戶表並填入 Sheet ID！'); return; }
+
+    log.innerHTML = "⌛ 正在從 Google Sheet 獲取代理資料...";
+    
+    try {
+        // 利用 Google Sheets 的導出 CSV 功能，不需 API Key
+        const url = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("無法讀取 Google Sheet，請確認 ID 與權限。");
+        
+        const csvText = await response.text();
+        const proxyWorkbook = XLSX.read(csvText, { type: 'string' });
+        const proxies = XLSX.utils.sheet_to_json(proxyWorkbook.Sheets[proxyWorkbook.SheetNames[0]]);
+
+        const userData = await userFile.arrayBuffer();
+        const userWorkbook = XLSX.read(userData);
+        const users = XLSX.utils.sheet_to_json(userWorkbook.Sheets[userWorkbook.SheetNames[0]]);
+
+        if (proxies.length === 0) { alert('代理表為空！'); return; }
+
+        const assignments = users.map((user, index) => {
+            const randomProxy = proxies[index % proxies.length];
+            let proxyIp = "";
+            for (let key in randomProxy) {
+                if (key.toLowerCase().includes('proxy')) { proxyIp = randomProxy[key]; break; }
+            }
+            return { ...user, proxy: proxyIp, proxytype: 'socks5' };
+        });
+
+        const workbook = XLSX.utils.book_new();
+        const sheet = XLSX.utils.json_to_sheet(assignments);
+        XLSX.utils.book_append_sheet(workbook, sheet, 'Assigned');
+        const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+        saveAs(new Blob([buffer]), `${dateStr}_${assignments.length}_ip.xlsx`);
+
+        log.innerHTML = `✅ 雲端分配完成！共 ${assignments.length} 筆資料。`;
+    } catch (error) {
+        log.innerHTML = `❌ 錯誤：${error.message}`;
+    }
+}
+
+// ... 補上其餘 handleSplitMerge 與 handleTransform 代碼即可 ...
+</script>
+</body>
+</html>
