@@ -49,6 +49,8 @@
         <input type="text" id="sheetId" placeholder="貼上試算表 ID (網址中 /d/ 後的那串)">
     </div>
 
+    <hr style="border:0.5px solid #eee; margin: 20px 0;">
+
     <div id="splitUI">
         <div class="row">
             <div class="field-group"><label>2. 保留標題列數</label><input type="number" id="headerRows" value="2" min="1"></div>
@@ -75,13 +77,22 @@ let currentMode = 'split';
 
 function switchMode(mode) {
     currentMode = mode;
-    document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', (i === 0 && mode === 'split') || (i === 1 && mode === 'transform') || (i === 2 && mode === 'proxy')));
+    
+    // 更新 Tabs 樣式
+    document.querySelectorAll('.tab').forEach((t, i) => {
+        t.classList.toggle('active', (i === 0 && mode === 'split') || (i === 1 && mode === 'transform') || (i === 2 && mode === 'proxy'));
+    });
+
+    // 控制上傳區塊顯示
     document.getElementById('commonUpload').style.display = (mode === 'proxy') ? 'none' : 'block';
     document.getElementById('proxyUpload').style.display = (mode === 'proxy') ? 'block' : 'none';
+
+    // 控制 UI 區塊顯示
     document.getElementById('splitUI').style.display = (mode === 'split') ? 'block' : 'none';
     document.getElementById('transformUI').style.display = (mode === 'transform') ? 'block' : 'none';
     document.getElementById('proxyUI').style.display = (mode === 'proxy') ? 'block' : 'none';
-    document.getElementById('log').innerText = "等待操作...";
+
+    document.getElementById('log').innerText = "已切換功能，等待操作...";
 }
 
 function getMMDD() {
@@ -156,7 +167,8 @@ async function handleSplitMerge(fileInput, dateStr, log) {
 
 async function handleTransform(fileInput, dateStr, log) {
     const data = await fileInput.files[0].arrayBuffer();
-    const jsonData = XLSX.utils.sheet_to_json(XLSX.read(data).Sheets[XLSX.read(data).SheetNames[0]], { header: 1 });
+    const workbook = XLSX.read(data);
+    const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
     const newHeaders = ["acc_id", "id", "group", "name", "remark", "platform", "username", "password", "fakey", "cookie", "proxytype", "ipchecker", "proxy", "proxyurl", "proxyid", "ip", "countrycode", "ua", "device"];
     
     const h = jsonData[0];
@@ -165,4 +177,42 @@ async function handleTransform(fileInput, dateStr, log) {
     for (let i = 2; i < jsonData.length; i++) {
         const r = jsonData[i]; if (!r || isRowBlank(r)) continue;
         let nr = new Array(19).fill("");
-        nr[3]=r[idx.n]||""; nr[4]=r[idx.r]||""; nr[9]=r
+        nr[3]=r[idx.n]||""; nr[4]=r[idx.r]||""; nr[9]=r[idx.c]||""; nr[18]=r[idx.u]||"";
+        body.push(nr);
+    }
+    const ws = XLSX.utils.aoa_to_sheet([newHeaders, ...body]);
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    saveAs(new Blob([XLSX.write(wb, {type:'array'})]), `${dateStr}_${body.length}.xlsx`);
+    log.innerHTML = `✅ 轉換完成：${body.length} 筆資料。`;
+}
+
+async function handleCloudProxy(dateStr, log) {
+    const userFile = document.getElementById('userTable').files[0];
+    const sheetId = document.getElementById('sheetId').value.trim();
+    if (!userFile || !sheetId) throw new Error("請上傳用戶表並填入 ID！");
+    
+    const res = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`);
+    if (!res.ok) throw new Error("無法讀取試算表，請確認 ID 是否正確且已開放權限。");
+    
+    const csvData = await res.text();
+    const proxyWb = XLSX.read(csvData, {type:'string'});
+    const proxies = XLSX.utils.sheet_to_json(proxyWb.Sheets[proxyWb.SheetNames[0]]);
+    
+    const userData = await userFile.arrayBuffer();
+    const userWb = XLSX.read(userData);
+    const users = XLSX.utils.sheet_to_json(userWb.Sheets[userWb.SheetNames[0]]);
+    
+    const result = users.map((u, i) => {
+        const p = proxies[i % proxies.length];
+        let ip = ""; for(let k in p) if(k.toLowerCase().includes('proxy')) ip = p[k];
+        return { ...u, proxy: ip, proxytype: 'socks5' };
+    });
+
+    const finalWb = XLSX.utils.book_new(); 
+    XLSX.utils.book_append_sheet(finalWb, XLSX.utils.json_to_sheet(result), 'Assigned');
+    saveAs(new Blob([XLSX.write(finalWb, {type:'array'})]), `${dateStr}_${result.length}_ip.xlsx`);
+    log.innerHTML = `✅ 分配完成：共 ${result.length} 筆。`;
+}
+</script>
+</body>
+</html>
