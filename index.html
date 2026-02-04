@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>Excel 萬能工具箱 - 內建雲端版</title>
+    <title>Excel 萬能工具箱 - 終極整合版</title>
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
@@ -46,15 +46,15 @@
         <label>1. 上傳用戶表 (Excel)</label>
         <input type="file" id="userTable" accept=".xlsx, .xls">
         <label style="margin-top:10px;">2. Google Sheet ID (已內建)</label>
-        <input type="text" id="sheetId" value="19qYOvdspfs4LG_GxbiCFDQagem5fYRsS6sYMjwy9BFE" placeholder="貼上試算表 ID">
+        <input type="text" id="sheetId" value="19qYOvdspfs4LG_GxbiCFDQagem5fYRsS6sYMjwy9BFE">
     </div>
 
     <hr style="border:0.5px solid #eee; margin: 20px 0;">
 
     <div id="splitUI">
         <div class="row">
-            <div class="field-group"><label>2. 保留標題列數</label><input type="number" id="headerRows" value="2" min="1"></div>
-            <div class="field-group"><label>3. 每份筆數 (0=不分割)</label><input type="number" id="rowsPerFile" value="0" min="0"></div>
+            <div class="field-group"><label>2. 保留標題列數</label><input type="number" id="headerRows" value="2"></div>
+            <div class="field-group"><label>3. 每份筆數 (0=合併)</label><input type="number" id="rowsPerFile" value="0"></div>
         </div>
         <div class="checkbox-group" onclick="document.getElementById('doUnique').click()"><input type="checkbox" id="doUnique" checked onclick="event.stopPropagation()"><label>自動去除重複</label></div>
         <div class="checkbox-group" onclick="document.getElementById('removeBlank').click()"><input type="checkbox" id="removeBlank" checked onclick="event.stopPropagation()"><label>自動剔除空白列</label></div>
@@ -65,8 +65,8 @@
     </div>
 
     <div id="proxyUI" style="display:none;">
-        <div class="info-box">🌐 <strong>雲端代理分配：</strong>
-        • 已預設您的代理表 ID。
+        <div class="info-box">🌐 <strong>代理分配：</strong>
+        • 已預設雲端 ID，直接上傳用戶表即可執行。
         • 支援格式：host:port:user:pass。</div>
     </div>
     
@@ -77,7 +77,6 @@
 <script>
 let currentMode = 'split';
 
-// 分頁切換修復
 function switchMode(mode) {
     currentMode = mode;
     document.querySelectorAll('.tab').forEach((t, i) => {
@@ -88,6 +87,7 @@ function switchMode(mode) {
     document.getElementById('splitUI').style.display = (mode === 'split') ? 'block' : 'none';
     document.getElementById('transformUI').style.display = (mode === 'transform') ? 'block' : 'none';
     document.getElementById('proxyUI').style.display = (mode === 'proxy') ? 'block' : 'none';
+    document.getElementById('log').innerText = "已切換功能。";
 }
 
 function getMMDD() {
@@ -139,7 +139,7 @@ async function handleSplitMerge(fileInput, dateStr, log) {
         const ws = XLSX.utils.aoa_to_sheet([...finalHeaders, ...combinedBody]);
         const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
         saveAs(new Blob([XLSX.write(wb, {type:'array'})]), `${dateStr}_${total}.xlsx`);
-        log.innerHTML = `✅ 下載完成：共 ${total} 筆。`;
+        log.innerHTML = `✅ 完成下載單檔：${total} 筆。`;
     } else {
         const zip = new JSZip();
         for (let i = 0, count = 1; i < total; i += rowsSetting, count++) {
@@ -170,42 +170,40 @@ async function handleTransform(fileInput, dateStr, log) {
     const ws = XLSX.utils.aoa_to_sheet([newHeaders, ...body]);
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
     saveAs(new Blob([XLSX.write(wb, {type:'array'})]), `${dateStr}_${body.length}.xlsx`);
-    log.innerHTML = `✅ 轉換完成：${body.length} 筆。`;
+    log.innerHTML = `✅ 轉換完成：${body.length} 筆資料。`;
 }
 
-// 雲端代理分配邏輯
 async function handleCloudProxy(dateStr, log) {
     const userFile = document.getElementById('userTable').files[0];
     const sheetId = document.getElementById('sheetId').value.trim();
     if (!userFile || !sheetId) throw new Error("請上傳用戶表！");
     
-    // 抓取雲端 CSV
     const res = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`);
-    if (!res.ok) throw new Error("無法讀取試算表，請確認權限是否設為「知道連結的人均可檢視」。");
+    if (!res.ok) throw new Error("無法讀取試算表，請確認權限開放。");
     
     const csvText = await res.text();
-    const proxyRows = XLSX.utils.sheet_to_json(XLSX.read(csvText, {type:'string'}).Sheets["Sheet1"] || XLSX.read(csvText, {type:'string'}).Sheets[Object.keys(XLSX.read(csvText, {type:'string'}).Sheets)[0]], { header: 1 });
+    const proxyRows = XLSX.utils.sheet_to_json(XLSX.read(csvText, {type:'string'}).Sheets[Object.keys(XLSX.read(csvText, {type:'string'}).Sheets)[0]], { header: 1 });
     
-    // 自動尋找代理格式欄位
-    let proxyIdx = 0;
+    // 智慧尋找包含冒號的代理欄位
+    let pIdx = 0;
     for (let j = 0; j < (proxyRows[0] || []).length; j++) {
         if (proxyRows.slice(0, 10).some(row => row[j] && String(row[j]).includes(':'))) {
-            proxyIdx = j; break;
+            pIdx = j; break;
         }
     }
-    const proxyList = proxyRows.map(r => r[proxyIdx]).filter(v => v && String(v).includes(':'));
-    if (!proxyList.length) throw new Error("代理表中找不到符合 host:port 格式的資料！");
+    const pList = proxyRows.map(r => r[pIdx]).filter(v => v && String(v).includes(':'));
+    if (!pList.length) throw new Error("代理表找不到 : 格式資料。");
 
     const users = XLSX.utils.sheet_to_json(XLSX.read(await userFile.arrayBuffer()).Sheets[XLSX.read(await userFile.arrayBuffer()).SheetNames[0]]);
     const result = users.map((u, i) => {
-        const p = proxyList[i % proxyList.length]; // 均勻分配
-        return { ...u, proxy: p, "代理信息": p, proxytype: 'socks5' }; // 同時填入 proxy 與代理信息
+        const proxyVal = pList[i % pList.length]; // 均勻循環分配
+        return { ...u, proxy: proxyVal, proxytype: 'socks5' }; // 只填入 proxy，移除多餘欄位
     });
 
     const wb = XLSX.utils.book_new(); 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(result), 'Assigned');
     saveAs(new Blob([XLSX.write(wb, {type:'array'})]), `${dateStr}_${result.length}_ip.xlsx`);
-    log.innerHTML = `✅ 分配成功：共 ${result.length} 筆。`;
+    log.innerHTML = `✅ 分配成功：共 ${result.length} 筆資料。`;
 }
 </script>
 </body>
